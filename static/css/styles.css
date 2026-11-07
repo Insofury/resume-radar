@@ -557,6 +557,50 @@ button {
   }
 }
 
+.engine-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.engine-status::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex: none;
+}
+
+.engine-status.loading::before {
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.engine-status.ready {
+  color: var(--good-text);
+}
+
+.engine-status.ready::before {
+  background: var(--good);
+}
+
+.engine-status.error {
+  color: var(--bad-text);
+}
+
+.engine-status.error::before {
+  background: var(--bad);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
 .form-error {
   margin: 14px 0 0;
   padding: 10px 14px;

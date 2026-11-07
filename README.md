@@ -7,10 +7,16 @@ match score, the must-have skills you're missing, keyword gaps, experience/degre
 an ATS-style quality review and line-by-line bullet feedback. An optional AI coach
 (Claude) rewrites your weakest bullets for the job.
 
-Free, private (files are processed in memory, never stored) and no sign-up.
+Free, private and no sign-up.
+
+### 🔗 Live demo: **[insofury.github.io/resume-radar](https://insofury.github.io/resume-radar/)**
+
+The live demo runs **100% in your browser**: the Python analysis engine is loaded with
+[Pyodide](https://pyodide.org) (Python compiled to WebAssembly), so your resume never
+leaves your device.
 
 [![CI](https://github.com/Insofury/resume-radar/actions/workflows/ci.yml/badge.svg)](https://github.com/Insofury/resume-radar/actions/workflows/ci.yml)
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Insofury/resume-radar)
+[![Pages](https://github.com/Insofury/resume-radar/actions/workflows/pages.yml/badge.svg)](https://github.com/Insofury/resume-radar/actions/workflows/pages.yml)
 
 ![ResumeRadar match report](docs/screenshots/report.jpg)
 
@@ -63,11 +69,32 @@ Open **http://localhost:8000** and click **Try a sample**.
 To enable the AI coach, copy `.env.example` to `.env` and add your `ANTHROPIC_API_KEY`
 (from [console.anthropic.com](https://console.anthropic.com)). Everything else works without a key.
 
+## Two ways to run it
+
+| | Browser version (GitHub Pages) | Server version (FastAPI) |
+|---|---|---|
+| Where | [insofury.github.io/resume-radar](https://insofury.github.io/resume-radar/) | `python run.py`, Docker, Render… |
+| How it works | Pyodide runs the Python engine in the browser | Browser sends the resume to the Python API |
+| Hosting | Free static hosting, always on | Needs a Python host |
+| AI coach | Not available (needs a secret API key) | Available with `ANTHROPIC_API_KEY` |
+
+Both use **the same Python code** (`app/service.py` → `app/analyzer.py`). The UI picks the
+engine automatically: the Pages build includes a `browser-mode.json` file, the server doesn't.
+
 ## Deploy (free)
 
-**Render:** click **Deploy to Render** above, sign in with GitHub, optionally paste an
-`ANTHROPIC_API_KEY`, and click **Apply**. You get a public `onrender.com` URL that
-redeploys on every push.
+**GitHub Pages (browser version):** every push to `main` runs
+[`.github/workflows/pages.yml`](.github/workflows/pages.yml), which builds the static site
+with `scripts/build_pages.py` and publishes it. To preview the build locally:
+
+```bash
+python scripts/build_pages.py
+python -m http.server -d _site 8020
+```
+
+**Render (server version with AI coach):**
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Insofury/resume-radar)
+- sign in with GitHub, optionally paste an `ANTHROPIC_API_KEY`, and click **Apply**.
 
 **Docker (anywhere):**
 
@@ -93,6 +120,8 @@ Parts that don't apply (e.g. no degree requirement) are skipped and the weights 
 resume-radar/
 ├── app/
 │   ├── main.py         FastAPI routes + static site
+│   ├── service.py      shared "analyze" use case (server and browser)
+│   ├── browser.py      entry point for the Pyodide / GitHub Pages build
 │   ├── analyzer.py     the pipeline: score, breakdown, recommendations
 │   ├── skills.py       skills taxonomy, aliases, matching, related skills
 │   ├── job.py          job post parsing: must-have vs nice-to-have, years, degree
@@ -105,8 +134,9 @@ resume-radar/
 │   ├── security.py     rate limiting, security headers, upload limits
 │   ├── config.py       settings from environment variables
 │   └── samples.py      sample resume + job post
-├── static/             HTML, CSS and vanilla JS front-end
-├── tests/              31 pytest tests (engine, parsing, API, coach)
+├── static/             HTML, CSS and vanilla JS front-end (engine.js picks server or browser mode)
+├── scripts/build_pages.py   builds the GitHub Pages site into _site/
+├── tests/              40 pytest tests (engine, parsing, API, coach, Pages build)
 └── docs/PROJECT_NOTES.md   full module-by-module guide
 ```
 
@@ -138,9 +168,10 @@ pytest -q
 
 ## Privacy
 
-Uploaded files are read in memory, analysed and discarded - nothing is written to disk
-or a database. When you use the AI coach, your resume and the job post are sent to
-Anthropic's API to generate the suggestions.
+In the **browser version** your resume never leaves your device. In the **server
+version** uploaded files are read in memory, analysed and discarded - nothing is written
+to disk or a database. When you use the AI coach (server version only), your resume and
+the job post are sent to Anthropic's API to generate the suggestions.
 
 ## License
 

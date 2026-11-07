@@ -6,13 +6,13 @@
   <title>ResumeRadar</title>
   <meta name="description" content="ResumeRadar - check how well your resume matches a job description and get specific fixes. Free and private.">
   <meta name="theme-color" content="#0d9488">
-  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="static/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
-  <link rel="stylesheet" href="/static/css/styles.css?v=1.0.0">
-  <script src="/static/js/theme.js?v=1.0.0"></script>
-  <script type="module" src="/static/js/app.js?v=1.0.0"></script>
+  <link rel="stylesheet" href="static/css/styles.css?v=1.1.0">
+  <script src="static/js/theme.js?v=1.1.0"></script>
+  <script type="module" src="static/js/app.js?v=1.1.0"></script>
 </head>
 <body>
   <header class="site-header">
@@ -84,7 +84,7 @@
       <div class="form-foot">
         <p class="privacy">
           <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
-          Processed in memory and never stored.
+          <span id="privacyText">Processed in memory and never stored.</span>
         </p>
         <div class="form-actions">
           <button type="button" class="btn ghost" id="sampleBtn">Try a sample</button>
@@ -94,6 +94,7 @@
           </button>
         </div>
       </div>
+      <p class="engine-status" id="engineStatus" role="status" hidden></p>
       <p class="form-error" id="formError" role="alert" hidden></p>
     </form>
 

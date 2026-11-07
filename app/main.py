@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
+from functools import partial
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -21,12 +22,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .analyzer import analyze
 from .coach import Coach, CoachError
 from .config import STATIC_DIR, Settings
-from .parsing import SUPPORTED_EXTENSIONS, ParseError, extract_text
+from .parsing import SUPPORTED_EXTENSIONS
 from .samples import SAMPLE_JOB, SAMPLE_RESUME
 from .security import BodySizeLimitMiddleware, RateLimiter, SecurityHeadersMiddleware, client_ip
+from .service import UserError, run_analysis
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("resumeradar")
@@ -92,30 +93,26 @@ def create_app(settings: Settings | None = None, coach: Coach | None = None) -> 
     ) -> dict:
         limit(analyze_limiter, request)
 
-        source = {"type": "text"}
+        filename, data = None, None
         if resume_file is not None and resume_file.filename:
+            filename = resume_file.filename
             data = await resume_file.read(settings.max_upload_bytes + 1)
-            if len(data) > settings.max_upload_bytes:
-                raise HTTPException(413, f"Files must be under {settings.max_upload_bytes // (1024 * 1024)} MB.")
-            try:
-                parsed = await run_in_threadpool(extract_text, resume_file.filename, data)
-            except ParseError as exc:
-                raise HTTPException(400, str(exc)) from exc
-            resume_text = parsed["text"]
-            source = {"type": parsed["kind"], "filename": resume_file.filename, "pages": parsed["pages"]}
-
-        if len(resume_text.strip()) < 50:
-            raise HTTPException(400, "Please upload your resume or paste at least a few lines of it.")
-        if len(job_text.strip()) < 50:
-            raise HTTPException(400, "Please paste the job description you're applying for.")
-        if len(resume_text) > settings.max_resume_chars:
-            raise HTTPException(400, "Your resume text is too long - is this the right file?")
-        if len(job_text) > settings.max_job_chars:
-            raise HTTPException(400, "The job description is too long. Paste just the posting itself.")
-
-        report = await run_in_threadpool(analyze, resume_text, job_text)
-        report["source"] = source
-        return report
+        try:
+            # Parsing and analysis are CPU-bound: run them off the event loop.
+            return await run_in_threadpool(
+                partial(
+                    run_analysis,
+                    job_text,
+                    resume_text,
+                    filename,
+                    data,
+                    max_upload_bytes=settings.max_upload_bytes,
+                    max_resume_chars=settings.max_resume_chars,
+                    max_job_chars=settings.max_job_chars,
+                )
+            )
+        except UserError as exc:
+            raise HTTPException(exc.status, str(exc)) from exc
 
     @app.post("/api/coach", tags=["analysis"])
     async def coach_route(body: CoachRequest, request: Request) -> dict:

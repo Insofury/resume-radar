@@ -21,11 +21,26 @@ the specific job.
 | AI coach | Optional: `anthropic` SDK, Claude Opus 5.5, structured JSON output, server-side refusal fallbacks |
 | Frontend | Plain HTML, CSS and ES-module JavaScript (no build step, no external JS) |
 | Storage | None - files are processed in memory and discarded |
-| Tests | 31 pytest tests |
-| Deploy | Render blueprint, Dockerfile, Procfile, GitHub Actions CI |
+| Tests | 40 pytest tests |
+| Live site | https://insofury.github.io/resume-radar/ (GitHub Pages, Python runs in the browser via Pyodide) |
+| Deploy | GitHub Pages workflow, Render blueprint, Dockerfile, Procfile, GitHub Actions CI |
 
-**Design choice:** the core analysis needs **no API key**, so the site is free to host
-and fast. The AI coach is an add-on that switches on when `ANTHROPIC_API_KEY` is set.
+**Design choices:**
+- The core analysis needs **no API key** and is **pure Python** (standard library + `pypdf`).
+  That makes it free to host and lets the exact same code run in two places: on a FastAPI
+  server, or inside the visitor's browser with Pyodide.
+- The AI coach is an add-on for the server version that switches on when
+  `ANTHROPIC_API_KEY` is set.
+
+### Two versions, one codebase
+
+| | Browser version (GitHub Pages) | Server version (FastAPI) |
+|---|---|---|
+| Who runs the Python | The visitor's browser (Pyodide / WebAssembly) | The server |
+| Entry point | `app/browser.py` → `service.run_analysis` | `app/main.py` → `service.run_analysis` |
+| Front-end engine | `BrowserEngine` in `static/js/engine.js` | `ServerEngine` in `static/js/engine.js` |
+| Resume leaves the device? | No | Sent to the server, processed in memory |
+| AI coach | No (needs a secret key) | Yes, with `ANTHROPIC_API_KEY` |
 
 ---
 
@@ -80,6 +95,8 @@ resume-radar/
 ├── app/
 │   ├── __init__.py      version
 │   ├── main.py          FastAPI app factory and routes
+│   ├── service.py       shared analyze use case (server + browser)
+│   ├── browser.py       Pyodide entry point for the GitHub Pages build
 │   ├── config.py        Settings from env / .env
 │   ├── analyzer.py      the analysis pipeline and scoring
 │   ├── skills.py        skills taxonomy, matching, related-skill map
@@ -95,16 +112,20 @@ resume-radar/
 ├── static/
 │   ├── index.html       page layout
 │   ├── css/styles.css   design tokens, light/dark themes, print styles
-│   ├── js/app.js        controller: inputs, API calls, AI coach
+│   ├── js/app.js        controller: inputs, analysis, AI coach
+│   ├── js/engine.js     ServerEngine (FastAPI) or BrowserEngine (Pyodide)
 │   ├── js/render.js     renders the report
 │   ├── js/report.js     Markdown export
 │   └── js/theme.js      applies saved theme before paint
 ├── tests/
 │   ├── helpers.py       builds real mini PDF and DOCX files
 │   ├── test_engine.py   engine unit tests
-│   └── test_api.py      parsing, routes, coach tests
+│   ├── test_api.py      parsing, routes, coach tests
+│   └── test_pages.py    service layer, Pyodide entry point, Pages build
+├── scripts/build_pages.py   builds the GitHub Pages site into _site/
 ├── docs/                these notes + screenshots
-├── Dockerfile · render.yaml · Procfile · .github/workflows/ci.yml
+├── .github/workflows/   ci.yml (tests) and pages.yml (GitHub Pages deploy)
+├── Dockerfile · render.yaml · Procfile
 └── requirements.txt · requirements-dev.txt · run.py · .env.example
 ```
 
@@ -211,7 +232,20 @@ failed checks), `contact`, `stats` and the cleaned `resume_text` (used by the AI
   the text after any `fallback` block, validates with Pydantic (`CoachResult`) and maps
   SDK errors to friendly **`CoachError`** messages.
 
-### 4.10 `app/security.py`, `app/config.py`, `app/main.py`
+### 4.10 `app/service.py` - the shared use case
+**`run_analysis(job_text, resume_text, filename, data, *, limits)`** is used by both the
+server and the browser build: it checks the upload size, extracts text from a file
+(`parsing.extract_text`), validates lengths, runs `analyze()` and adds a `source` field.
+Problems raise **`UserError(message, status)`** - the server turns `status` into the HTTP
+code (400 / 413), the browser shows the message.
+
+### 4.11 `app/browser.py` - Pyodide entry point
+**`analyze_json(job_text, resume_text, filename, path)`** is called from JavaScript in the
+GitHub Pages version. JavaScript writes an uploaded file into Pyodide's in-memory file
+system at `path`; Python reads and deletes it, runs `run_analysis` and returns JSON
+(`{"ok": true, "report": …}` or `{"ok": false, "error": …}`).
+
+### 4.12 `app/security.py`, `app/config.py`, `app/main.py`
 - **`RateLimiter`**: per-IP sliding window (30 analyses/min, 5 coach calls/min by default).
 - **`client_ip`**: honours `X-Forwarded-For` only when `TRUST_PROXY=true`.
 - **`BodySizeLimitMiddleware`**: rejects bodies over ~5.5 MB with HTTP 413.
@@ -229,8 +263,16 @@ failed checks), `contact`, `stats` and the cleaned `resume_text` (used by the AI
   section (score card, skills, requirements & keywords, recommendations, AI coach, checks,
   bullets).
 - **`js/app.js`**: upload with drag-and-drop and validation, paste mode, sample loader,
-  `POST /api/analyze` with `FormData`, AI coach flow (loading → results → copy buttons),
-  Markdown download, print, theme toggle.
+  analysis through the engine, AI coach flow (loading → results → copy buttons),
+  Markdown download, print, theme toggle, Python-engine status line.
+- **`js/engine.js`**: `createEngine()` returns `BrowserEngine` if the site ships a
+  `browser-mode.json` (GitHub Pages build), otherwise `ServerEngine`.
+  - `ServerEngine` calls `api/config`, `api/sample`, `api/analyze`, `api/coach`.
+  - `BrowserEngine.warmUp()` loads Pyodide from the jsDelivr CDN, installs `pypdf` with
+    `micropip`, writes the ResumeRadar modules into Pyodide's file system and imports
+    `app.browser`. It starts in the background on page load (≈10 MB the first time,
+    cached afterwards) and reports progress through `onStatus`.
+    `analyze()` writes an uploaded file to `/tmp` and calls `analyze_json`.
 - **`js/render.js`**: animated SVG gauge and breakdown bars, colour-coded chips, status
   dots, recommendations, checks and bullet cards. All text is escaped before insertion.
 - **`js/report.js`**: turns the report (plus AI suggestions) into a Markdown file.
@@ -257,9 +299,23 @@ Errors: `400` (validation / unreadable file), `413` (too large), `429` (rate lim
 
 ---
 
-## 7. Testing
+## 7. GitHub Pages build
 
-`pytest -q` runs 31 tests:
+- **`scripts/build_pages.py`** builds `_site/`: copies `static/` and `index.html`, copies the
+  12 browser-safe modules listed in `BROWSER_MODULES` to `_site/py/app/`, and writes
+  `browser-mode.json` (Pyodide version, packages, module list), `sample.json` and
+  `.nojekyll`. Asset paths in `index.html` are relative, so the site works under
+  `/resume-radar/`.
+- **`.github/workflows/pages.yml`** runs the build on every push to `main` and deploys it
+  with `actions/upload-pages-artifact` + `actions/deploy-pages`.
+- A test (`test_browser_modules_only_use_stdlib_and_pypdf`) guarantees nothing shipped to
+  the browser imports FastAPI or the Anthropic SDK.
+
+---
+
+## 8. Testing
+
+`pytest -q` runs 40 tests:
 - **Engine** - tricky skill matching (C++, .NET, React Native vs React, Go vs "go above",
   R vs R&D), stemming, keyword filtering, date-range maths with overlaps, degree detection,
   must-have vs nice-to-have parsing, resume structure, bullet helpers, the full sample
@@ -267,10 +323,12 @@ Errors: `400` (validation / unreadable file), `413` (too large), `429` (rate lim
 - **API & parsing** - real generated PDF and DOCX files, bad files, every route, upload
   limits, rate limiting, and the AI coach with a fake Claude client (structured output
   params, fallback handling, refusals, invalid JSON, API errors).
+- **Pages** - the shared service layer (success and every error status), the Pyodide
+  entry point, the static build output, and the browser-safe import rule.
 
 ---
 
-## 8. How to extend
+## 9. How to extend
 
 | Goal | Where |
 |---|---|

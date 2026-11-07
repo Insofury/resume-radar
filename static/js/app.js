@@ -1,10 +1,12 @@
 // ResumeRadar front-end controller: input handling, API calls, results and the AI coach.
 
+import { createEngine } from "./engine.js?v=1.1.1";
 import { esc, renderReport } from "./render.js";
 import { reportToMarkdown } from "./report.js";
 
 const $ = (id) => document.getElementById(id);
-const state = { mode: "file", file: null, config: null, report: null, coach: null, coachLoading: false };
+const state = { mode: "file", file: null, config: null, report: null, coach: null, coachLoading: false, engine: null };
+const engineReady = createEngine().then((engine) => (state.engine = engine));
 
 // ------------------------------------------------------------ helpers
 function toast(message) {
@@ -21,15 +23,11 @@ function showError(message) {
   el.hidden = !message;
 }
 
-async function apiError(res) {
-  try {
-    const body = await res.json();
-    if (typeof body.detail === "string") return body.detail;
-    if (Array.isArray(body.detail)) return body.detail.map((d) => d.msg).join("; ");
-  } catch {
-    /* not JSON */
-  }
-  return `Something went wrong (HTTP ${res.status}).`;
+function setEngineStatus(kind, message) {
+  const el = $("engineStatus");
+  el.hidden = !message;
+  el.className = `engine-status ${kind}`;
+  el.textContent = message;
 }
 
 function formatSize(bytes) {
@@ -133,8 +131,8 @@ $("jobText").addEventListener("input", updateJobCount);
 
 $("sampleBtn").addEventListener("click", async () => {
   try {
-    const res = await fetch("/api/sample");
-    const sample = await res.json();
+    const engine = await engineReady;
+    const sample = await engine.sample();
     state.file = null;
     $("resumeText").value = sample.resume;
     $("jobText").value = sample.job;
@@ -157,19 +155,22 @@ $("analyzeForm").addEventListener("submit", async (e) => {
   if (state.mode === "text" && countWords(resumeText) < 10) return showError("Paste your resume text first.");
   if (countWords(job) < 10) return showError("Paste the job description you're applying for.");
 
-  const form = new FormData();
-  form.append("job_text", job);
-  if (state.mode === "file") form.append("resume_file", state.file);
-  else form.append("resume_text", resumeText);
-
   const btn = $("analyzeBtn");
+  const label = btn.querySelector(".btn-label");
   btn.disabled = true;
   btn.classList.add("loading");
-  btn.querySelector(".btn-label").textContent = "Analyzing…";
   try {
-    const res = await fetch("/api/analyze", { method: "POST", body: form });
-    if (!res.ok) throw new Error(await apiError(res));
-    state.report = await res.json();
+    const engine = await engineReady;
+    if (engine.mode === "browser" && !engine.api) {
+      label.textContent = "Starting Python…";
+      await engine.warmUp();
+    }
+    label.textContent = "Analyzing…";
+    state.report = await engine.analyze({
+      file: state.mode === "file" ? state.file : null,
+      resumeText,
+      jobText: job,
+    });
     state.coach = null;
     $("results").hidden = false;
     renderReport(state.report);
@@ -180,7 +181,7 @@ $("analyzeForm").addEventListener("submit", async (e) => {
   } finally {
     btn.disabled = false;
     btn.classList.remove("loading");
-    btn.querySelector(".btn-label").textContent = "Analyze match";
+    label.textContent = "Analyze match";
   }
 });
 
@@ -195,7 +196,9 @@ function renderCoach(errorMessage = "") {
       <p>${
         enabled
           ? "Let Claude rewrite your weakest bullets for this job and draft a tailored summary. It never invents experience."
-          : "The AI coach is off on this server. Add an ANTHROPIC_API_KEY to unlock Claude-written bullet rewrites and a tailored summary."
+          : state.config?.mode === "browser"
+            ? 'This version runs entirely in your browser. The AI coach (Claude-written bullet rewrites and a tailored summary) needs the server version with an API key - see the <a href="https://github.com/Insofury/resume-radar#quick-start" target="_blank" rel="noopener">README</a>.'
+            : "The AI coach is off on this server. Add an ANTHROPIC_API_KEY to unlock Claude-written bullet rewrites and a tailored summary."
       }</p></div>`;
   if (enabled && !state.coach && !state.coachLoading) head += '<button type="button" class="btn primary" id="coachBtn">Rewrite with AI</button>';
   head += "</div>";
@@ -241,18 +244,12 @@ async function runCoach() {
   state.coachLoading = true;
   renderCoach();
   try {
-    const res = await fetch("/api/coach", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        resume_text: report.resume_text,
-        job_text: $("jobText").value.trim(),
-        missing_skills: report.skills.missing.map((s) => s.name),
-        weak_bullets: report.bullets.map((b) => b.text),
-      }),
+    state.coach = await state.engine.coach({
+      resume_text: report.resume_text,
+      job_text: $("jobText").value.trim(),
+      missing_skills: report.skills.missing.map((s) => s.name),
+      weak_bullets: report.bullets.map((b) => b.text),
     });
-    if (!res.ok) throw new Error(await apiError(res));
-    state.coach = await res.json();
     state.coachLoading = false;
     renderCoach();
   } catch (err) {
@@ -279,11 +276,16 @@ $("printBtn").addEventListener("click", () => window.print());
 
 // ------------------------------------------------------------ init
 (async function init() {
-  try {
-    const res = await fetch("/api/config");
-    state.config = await res.json();
-  } catch {
-    state.config = { coach_enabled: false, max_upload_mb: 5 };
-  }
   updateJobCount();
+  const engine = await engineReady;
+  try {
+    state.config = await engine.config();
+  } catch {
+    state.config = { coach_enabled: false, max_upload_mb: 5, mode: engine.mode };
+  }
+  if (engine.mode === "browser") {
+    $("privacyText").textContent = "Runs entirely in your browser - your resume never leaves your device.";
+    engine.onStatus = setEngineStatus;
+    engine.warmUp().catch(() => {}); // start downloading Python now so it's ready when needed
+  }
 })();
