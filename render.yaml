@@ -1,0 +1,18 @@
+# Render Blueprint - one-click deploy: https://render.com/deploy
+services:
+  - type: web
+    name: resume-radar
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*'
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: TRUST_PROXY
+        value: "true"
+      # Optional: paste a key to enable the AI coach. Leave empty and everything else still works.
+      - key: ANTHROPIC_API_KEY
+        sync: false
